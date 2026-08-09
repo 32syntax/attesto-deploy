@@ -1,0 +1,141 @@
+name: attest0
+
+x-backend-image: &backend-image
+  image: ghcr.io/${GHCR_OWNER}/attesto-backend:${IMAGE_TAG:-latest}
+  build:
+    context: ../backend
+
+x-backend-env: &backend-env
+  ENVIRONMENT: production
+  DEBUG: "false"
+  SECRET_KEY: ${SECRET_KEY}
+  COOKIE_SECURE: "true"
+  DB_NAME: ${DB_NAME:-attesto}
+  DB_USER: ${DB_USER:-attesto}
+  DB_PASSWORD: ${DB_PASSWORD}
+  DB_HOST: db
+  DB_PORT: "5432"
+  REDIS_URL: redis://redis:6379/0
+  CORS_ALLOWED_ORIGINS: https://${DOMAIN}
+  FRONTEND_BASE_URL: https://${DOMAIN}
+  EMAIL_BACKEND: ${EMAIL_BACKEND:-smtp}
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USERNAME: ${SMTP_USERNAME:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
+  SMTP_FROM_ADDRESS: ${SMTP_FROM_ADDRESS:-no-reply@example.com}
+  SMTP_FROM_NAME: ${SMTP_FROM_NAME:-Attest0}
+  UPLOADS_DIR: /app/uploads
+  MAX_LOGO_SIZE_MB: ${MAX_LOGO_SIZE_MB:-2}
+  MAX_ATTACHMENT_SIZE_MB: ${MAX_ATTACHMENT_SIZE_MB:-20}
+  PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-stub}
+  YOOKASSA_SHOP_ID: ${YOOKASSA_SHOP_ID:-}
+  YOOKASSA_SECRET_KEY: ${YOOKASSA_SECRET_KEY:-}
+  YOOKASSA_RETURN_URL: ${YOOKASSA_RETURN_URL:-}
+  INVOICE_PAYEE_NAME: ${INVOICE_PAYEE_NAME:-}
+  INVOICE_PAYEE_INN: ${INVOICE_PAYEE_INN:-}
+  INVOICE_PAYEE_ACCOUNT: ${INVOICE_PAYEE_ACCOUNT:-}
+  INVOICE_PAYEE_BANK: ${INVOICE_PAYEE_BANK:-}
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-attesto}
+      POSTGRES_USER: ${DB_USER:-attesto}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-attesto} -d ${DB_NAME:-attesto}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Одноразовый прогон миграций перед стартом backend/celery — тот же
+  # образ, что и backend, другая команда. "restart: no": один прогон за
+  # запуск `docker compose up`, а не постоянно перезапускающийся сервис.
+  migrate:
+    <<: *backend-image
+    restart: "no"
+    environment:
+      <<: *backend-env
+    volumes:
+      - uploads:/app/uploads
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  backend:
+    <<: *backend-image
+    restart: unless-stopped
+    environment:
+      <<: *backend-env
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  celery-worker:
+    <<: *backend-image
+    restart: unless-stopped
+    environment:
+      <<: *backend-env
+    volumes:
+      - uploads:/app/uploads
+    command: ["celery", "-A", "apps.infrastructure.celery_app", "worker", "--loglevel=info"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  frontend:
+    image: ghcr.io/${GHCR_OWNER}/attesto-frontend:${IMAGE_TAG:-latest}
+    build:
+      context: ../frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+
+volumes:
+  pgdata:
+  redisdata:
+  uploads:
+  caddy_data:
+  caddy_config:
