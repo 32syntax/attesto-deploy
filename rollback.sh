@@ -21,6 +21,17 @@ log()  { echo -e "\033[1;32m[rollback]\033[0m $*"; }
 warn() { echo -e "\033[1;33m[rollback]\033[0m $*"; }
 die()  { echo -e "\033[1;31m[rollback]\033[0m $*" >&2; exit 1; }
 
+# См. update.sh — намеренно не "source": значение с пробелом без кавычек
+# ломает bash-выполнение файла как кода, к тому же source небезопасен
+# для произвольного содержимого .env.
+load_env() {
+  local key value
+  while IFS='=' read -r key value; do
+    [[ -z "${key}" || "${key}" == \#* ]] && continue
+    export "${key}=${value}"
+  done < "$1"
+}
+
 [[ -f .env ]] || die ".env не найден — запустите из папки установки (обычно /opt/attest0)."
 [[ -f .previous_version ]] || die "Нет записи о предыдущей версии (.previous_version) — откатывать нечего. Обновление ./update.sh ни разу не запускалось из этой папки?"
 [[ -f .previous_backup ]] || die "Нет записи о бэкапе (.previous_backup) — не могу безопасно откатить БД."
@@ -40,8 +51,7 @@ read -rp "Продолжить? Введите 'да' для подтвержд�
 [[ "${CONFIRM}" == "да" ]] || { log "Отменено."; exit 0; }
 
 COMPOSE=(docker compose -f docker-compose.prod.yml --env-file .env)
-# shellcheck disable=SC1091
-source .env
+load_env .env
 
 log "Шаг 1/5 — останавливаю backend и celery-worker (база остаётся поднятой)."
 "${COMPOSE[@]}" stop backend celery-worker frontend
@@ -52,8 +62,7 @@ log "Шаг 2/5 — восстанавливаю базу данных из ${BA
 log "Шаг 3/5 — переключаю IMAGE_TAG обратно на ${PREV_VERSION}."
 sed -i.bak -e "s#^IMAGE_TAG=.*#IMAGE_TAG=${PREV_VERSION}#" .env
 rm -f .env.bak
-# shellcheck disable=SC1091
-source .env
+load_env .env
 
 log "Шаг 4/5 — скачиваю образы версии ${PREV_VERSION} (если их уже нет локально) и поднимаю сервисы."
 "${COMPOSE[@]}" pull

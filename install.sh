@@ -11,6 +11,18 @@ log()  { echo -e "\033[1;32m[install]\033[0m $*"; }
 warn() { echo -e "\033[1;33m[install]\033[0m $*"; }
 die()  { echo -e "\033[1;31m[install]\033[0m $*" >&2; exit 1; }
 
+# Читает .env построчно как KEY=VALUE и экспортирует — не "source",
+# который выполняет файл как bash-код: значение с пробелом без кавычек
+# (например, INVOICE_PAYEE_NAME=ООО Ромашка) сломает выполнение, а
+# спецсимволы в значении выполнились бы как код.
+load_env() {
+  local key value
+  while IFS='=' read -r key value; do
+    [[ -z "${key}" || "${key}" == \#* ]] && continue
+    export "${key}=${value}"
+  done < "$1"
+}
+
 [[ $EUID -eq 0 ]] || die "Запустите скрипт от root (sudo bash install.sh)."
 
 log "Шаг 1/6 — проверяю Docker."
@@ -68,10 +80,7 @@ else
 fi
 
 log "Шаг 5/6 — генерирую Caddyfile из шаблона."
-set -a
-# shellcheck disable=SC1091
-source .env
-set +a
+load_env .env
 envsubst '${DOMAIN} ${ACME_EMAIL}' < Caddyfile.template > Caddyfile
 
 log "Шаг 6/6 — скачиваю образы и запускаю."

@@ -16,6 +16,20 @@ log()  { echo -e "\033[1;32m[update]\033[0m $*"; }
 warn() { echo -e "\033[1;33m[update]\033[0m $*"; }
 die()  { echo -e "\033[1;31m[update]\033[0m $*" >&2; exit 1; }
 
+# Читает .env построчно как KEY=VALUE и экспортирует — не "source",
+# который выполняет файл как bash-код: значение с пробелом без кавычек
+# (например, INVOICE_PAYEE_NAME=ООО Ромашка) превращается в отдельную
+# команду и падает с "Ромашка: command not found", а спецсимволы в
+# значении (случайный `, $(...), ; ) выполнились бы как код. Здесь —
+# только присваивание переменной, без интерпретации содержимого.
+load_env() {
+  local key value
+  while IFS='=' read -r key value; do
+    [[ -z "${key}" || "${key}" == \#* ]] && continue
+    export "${key}=${value}"
+  done < "$1"
+}
+
 [[ -f .env ]] || die ".env не найден — запустите из папки установки (обычно /opt/attest0)."
 [[ $# -eq 1 ]] || die "Использование: ./update.sh <версия>, например ./update.sh 0.24.3"
 NEW_VERSION="$1"
@@ -30,9 +44,7 @@ if [[ "${NEW_VERSION}" == "${CURRENT_VERSION}" ]]; then
 fi
 
 COMPOSE=(docker compose -f docker-compose.prod.yml --env-file .env)
-
-# shellcheck disable=SC1091
-source .env
+load_env .env
 
 log "Шаг 1/6 — бэкап базы данных перед обновлением."
 mkdir -p backups
