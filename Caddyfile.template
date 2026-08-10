@@ -1,5 +1,5 @@
-{$DOMAIN} {
+$DOMAIN {
 	encode gzip
 	reverse_proxy frontend:80
-	tls {$ACME_EMAIL}
+	tls $ACME_EMAIL
 }
