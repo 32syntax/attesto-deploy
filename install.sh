@@ -28,10 +28,13 @@ log "Шаг 2/6 — папка установки: ${INSTALL_DIR}"
 mkdir -p "${INSTALL_DIR}/backups"
 cd "${INSTALL_DIR}"
 
-log "Шаг 3/6 — скачиваю docker-compose.prod.yml и шаблон Caddyfile."
+log "Шаг 3/6 — скачиваю docker-compose.prod.yml, скрипты обновления/отката и шаблон Caddyfile."
 curl -fsSL "${REPO_RAW_BASE}/docker-compose.prod.yml" -o docker-compose.prod.yml
 curl -fsSL "${REPO_RAW_BASE}/Caddyfile.template" -o Caddyfile.template
 curl -fsSL "${REPO_RAW_BASE}/.env.example" -o .env.example
+curl -fsSL "${REPO_RAW_BASE}/update.sh" -o update.sh
+curl -fsSL "${REPO_RAW_BASE}/rollback.sh" -o rollback.sh
+chmod +x update.sh rollback.sh
 
 if [[ -f .env ]]; then
   warn ".env уже существует — оставляю как есть (повторный запуск install.sh не перезатирает настройки)."
