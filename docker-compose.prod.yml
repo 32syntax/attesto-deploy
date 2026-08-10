@@ -65,9 +65,12 @@ services:
       timeout: 5s
       retries: 10
 
-  # Одноразовый прогон миграций перед стартом backend/celery — тот же
-  # образ, что и backend, другая команда. "restart: no": один прогон за
-  # запуск `docker compose up`, а не постоянно перезапускающийся сервис.
+  # Одноразовый прогон миграций + сида перед стартом backend/celery —
+  # тот же образ, что и backend, другая команда. "restart: no": один
+  # прогон за запуск `docker compose up`, а не постоянно
+  # перезапускающийся сервис. scripts.seed идемпотентен (безопасно
+  # гонять на каждом деплое, не только на чистой базе) — без него
+  # первая же регистрация упала бы: нет ни ролей, ни тарифных редакций.
   migrate:
     <<: *backend-image
     restart: "no"
@@ -75,7 +78,7 @@ services:
       <<: *backend-env
     volumes:
       - uploads:/app/uploads
-    command: ["alembic", "upgrade", "head"]
+    command: ["sh", "-c", "alembic upgrade head && python -m scripts.seed"]
     depends_on:
       db:
         condition: service_healthy
