@@ -61,6 +61,14 @@ echo "${BACKUP_FILE}" > .previous_backup
 log "Шаг 3/6 — переключаю IMAGE_TAG на ${NEW_VERSION} в .env."
 sed -i.bak -e "s#^IMAGE_TAG=.*#IMAGE_TAG=${NEW_VERSION}#" .env
 rm -f .env.bak
+# Без этого повторного load_env шелл всё ещё держит старый IMAGE_TAG,
+# экспортированный ДО перезаписи файла (см. вызов load_env .env выше) —
+# а переменная окружения shell'а перебивает --env-file для docker compose,
+# так что pull/up ниже тихо продолжили бы использовать старую версию,
+# даже когда сам .env на диске уже правильный (баг был найден именно так:
+# update.sh отрапортовал успех на 0.27.7, а реально работал контейнер
+# 0.26.1 — см. rollback.sh, где этот повторный вызов уже был).
+load_env .env
 
 log "Шаг 4/6 — скачиваю образы ${NEW_VERSION}."
 if ! "${COMPOSE[@]}" pull; then
