@@ -40,13 +40,14 @@ log "Шаг 2/6 — папка установки: ${INSTALL_DIR}"
 mkdir -p "${INSTALL_DIR}/backups"
 cd "${INSTALL_DIR}"
 
-log "Шаг 3/6 — скачиваю docker-compose.prod.yml, скрипты обновления/отката и шаблон Caddyfile."
+log "Шаг 3/7 — скачиваю docker-compose.prod.yml, скрипты обновления/отката/бэкапа и шаблон Caddyfile."
 curl -fsSL "${REPO_RAW_BASE}/docker-compose.prod.yml" -o docker-compose.prod.yml
 curl -fsSL "${REPO_RAW_BASE}/Caddyfile.template" -o Caddyfile.template
 curl -fsSL "${REPO_RAW_BASE}/.env.example" -o .env.example
 curl -fsSL "${REPO_RAW_BASE}/update.sh" -o update.sh
 curl -fsSL "${REPO_RAW_BASE}/rollback.sh" -o rollback.sh
-chmod +x update.sh rollback.sh
+curl -fsSL "${REPO_RAW_BASE}/backup_daily.sh" -o backup_daily.sh
+chmod +x update.sh rollback.sh backup_daily.sh
 
 if [[ -f .env ]]; then
   warn ".env уже существует — оставляю как есть (повторный запуск install.sh не перезатирает настройки)."
@@ -79,13 +80,22 @@ else
   warn "защита от запуска с незаполненными настройками, не баг."
 fi
 
-log "Шаг 5/6 — генерирую Caddyfile из шаблона."
+log "Шаг 5/7 — генерирую Caddyfile из шаблона."
 load_env .env
 envsubst '${DOMAIN} ${ACME_EMAIL}' < Caddyfile.template > Caddyfile
 
-log "Шаг 6/6 — скачиваю образы и запускаю."
+log "Шаг 6/7 — скачиваю образы и запускаю."
 docker compose -f docker-compose.prod.yml --env-file .env pull
 docker compose -f docker-compose.prod.yml --env-file .env up -d
+
+log "Шаг 7/7 — ежедневный бэкап БД по cron (ATT-057 §4)."
+CRON_LINE="0 3 * * * cd ${INSTALL_DIR} && ./backup_daily.sh >> ${INSTALL_DIR}/backup_cron.log 2>&1"
+if ! crontab -l 2>/dev/null | grep -qF "backup_daily.sh"; then
+  (crontab -l 2>/dev/null; echo "${CRON_LINE}") | crontab -
+  log "Cron добавлен: бэкап каждый день в 03:00 (время сервера)."
+else
+  log "Cron для backup_daily.sh уже настроен — не дублирую."
+fi
 
 log "Готово. Сайт будет доступен на https://${DOMAIN} — Caddy получает"
 log "сертификат автоматически, это может занять 1-2 минуты."
