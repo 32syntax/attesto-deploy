@@ -12,6 +12,8 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
+REPO_RAW_BASE="${REPO_RAW_BASE:-https://raw.githubusercontent.com/32syntax/attesto-deploy/main}"
+
 log()  { echo -e "\033[1;32m[update]\033[0m $*"; }
 warn() { echo -e "\033[1;33m[update]\033[0m $*"; }
 die()  { echo -e "\033[1;31m[update]\033[0m $*" >&2; exit 1; }
@@ -43,10 +45,26 @@ if [[ "${NEW_VERSION}" == "${CURRENT_VERSION}" ]]; then
   exit 0
 fi
 
+log "Шаг 1/7 — синхронизирую docker-compose.prod.yml с репозиторием."
+# install.sh скачивает docker-compose.prod.yml один раз при первой
+# установке, но update.sh раньше НИКОГДА не обновлял этот файл на
+# сервере — если релиз менял docker-compose.prod.yml (например добавлял
+# проброс новой переменной окружения в контейнер), сервер молча
+# оставался на старой версии файла: .env мог содержать что угодно, но
+# без соответствующей строки в docker-compose.prod.yml docker compose
+# просто не передавал переменную в контейнер. Найдено вживую 16.08.2026
+# на релизе с SmartCaptcha — ключи стояли в .env, но backend их не видел,
+# пока файл не подтянули вручную.
+curl -fsSL "${REPO_RAW_BASE}/docker-compose.prod.yml" -o docker-compose.prod.yml.new
+if [[ -f docker-compose.prod.yml ]] && ! diff -q docker-compose.prod.yml docker-compose.prod.yml.new >/dev/null 2>&1; then
+  log "docker-compose.prod.yml обновился — применяю."
+fi
+mv docker-compose.prod.yml.new docker-compose.prod.yml
+
 COMPOSE=(docker compose -f docker-compose.prod.yml --env-file .env)
 load_env .env
 
-log "Шаг 1/6 — бэкап базы данных перед обновлением."
+log "Шаг 2/7 — бэкап базы данных перед обновлением."
 mkdir -p backups
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP_FILE="backups/attest0_before_${NEW_VERSION}_${TIMESTAMP}.dump"
@@ -54,11 +72,11 @@ BACKUP_FILE="backups/attest0_before_${NEW_VERSION}_${TIMESTAMP}.dump"
 [[ -s "${BACKUP_FILE}" ]] || die "Бэкап получился пустым — обновление остановлено, ничего не менялось."
 log "Бэкап сохранён: ${BACKUP_FILE} ($(du -h "${BACKUP_FILE}" | cut -f1))"
 
-log "Шаг 2/6 — запоминаю текущую версию для отката (rollback.sh без аргументов вернёт именно её)."
+log "Шаг 3/7 — запоминаю текущую версию для отката (rollback.sh без аргументов вернёт именно её)."
 echo "${CURRENT_VERSION}" > .previous_version
 echo "${BACKUP_FILE}" > .previous_backup
 
-log "Шаг 3/6 — переключаю IMAGE_TAG на ${NEW_VERSION} в .env."
+log "Шаг 4/7 — переключаю IMAGE_TAG на ${NEW_VERSION} в .env."
 sed -i.bak -e "s#^IMAGE_TAG=.*#IMAGE_TAG=${NEW_VERSION}#" .env
 rm -f .env.bak
 # Без этого повторного load_env шелл всё ещё держит старый IMAGE_TAG,
@@ -70,14 +88,14 @@ rm -f .env.bak
 # 0.26.1 — см. rollback.sh, где этот повторный вызов уже был).
 load_env .env
 
-log "Шаг 4/6 — скачиваю образы ${NEW_VERSION}."
+log "Шаг 5/7 — скачиваю образы ${NEW_VERSION}."
 if ! "${COMPOSE[@]}" pull; then
   warn "Не удалось скачать образы ${NEW_VERSION} — откатываю .env обратно, ничего не трогал."
   sed -i.bak -e "s#^IMAGE_TAG=.*#IMAGE_TAG=${CURRENT_VERSION}#" .env && rm -f .env.bak
   die "Обновление прервано на этапе скачивания образов."
 fi
 
-log "Шаг 5/6 — прогоняю миграции базы данных и пересоздаю контейнеры."
+log "Шаг 6/7 — прогоняю миграции базы данных и пересоздаю контейнеры."
 "${COMPOSE[@]}" up -d
 log "Жду, пока backend пройдёт healthcheck (до 60 секунд)…"
 for _ in $(seq 1 30); do
@@ -92,7 +110,7 @@ if [[ "${STATUS:-}" != "healthy" ]]; then
   die "Обновление применено, но backend нездоров — рассмотрите откат: ./rollback.sh"
 fi
 
-log "Шаг 6/6 — версия обновлена и подтверждена healthcheck'ом."
+log "Шаг 7/7 — версия обновлена и подтверждена healthcheck'ом."
 echo "${NEW_VERSION}" > .current_version
 {
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ${CURRENT_VERSION} -> ${NEW_VERSION} backup=${BACKUP_FILE}"
