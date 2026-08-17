@@ -25,7 +25,7 @@ load_env() {
 
 [[ $EUID -eq 0 ]] || die "Запустите скрипт от root (sudo bash install.sh)."
 
-log "Шаг 1/6 — проверяю Docker."
+log "Шаг 1/8 — проверяю Docker."
 if ! command -v docker >/dev/null 2>&1; then
   log "Docker не найден, ставлю через официальный скрипт get.docker.com…"
   curl -fsSL https://get.docker.com | sh
@@ -36,11 +36,11 @@ fi
 
 docker compose version >/dev/null 2>&1 || die "docker compose (плагин) не найден — обновите Docker Engine до версии с встроенным compose."
 
-log "Шаг 2/6 — папка установки: ${INSTALL_DIR}"
+log "Шаг 2/8 — папка установки: ${INSTALL_DIR}"
 mkdir -p "${INSTALL_DIR}/backups"
 cd "${INSTALL_DIR}"
 
-log "Шаг 3/7 — скачиваю docker-compose.prod.yml, скрипты обновления/отката/бэкапа и шаблон Caddyfile."
+log "Шаг 3/8 — скачиваю docker-compose.prod.yml, скрипты обновления/отката/бэкапа и шаблон Caddyfile."
 curl -fsSL "${REPO_RAW_BASE}/docker-compose.prod.yml" -o docker-compose.prod.yml
 curl -fsSL "${REPO_RAW_BASE}/Caddyfile.template" -o Caddyfile.template
 curl -fsSL "${REPO_RAW_BASE}/.env.example" -o .env.example
@@ -52,7 +52,7 @@ chmod +x update.sh rollback.sh backup_daily.sh
 if [[ -f .env ]]; then
   warn ".env уже существует — оставляю как есть (повторный запуск install.sh не перезатирает настройки)."
 else
-  log "Шаг 4/6 — настройка (домен, почта для TLS-сертификата)."
+  log "Шаг 4/8 — настройка (домен, почта для TLS-сертификата)."
   read -rp "Домен сайта (например attest0.ru): " DOMAIN
   read -rp "Email для Let's Encrypt (уведомления об истечении сертификата): " ACME_EMAIL
   read -rp "Владелец GitHub-репозитория с образами [${GHCR_OWNER_DEFAULT}]: " GHCR_OWNER
@@ -80,21 +80,32 @@ else
   warn "защита от запуска с незаполненными настройками, не баг."
 fi
 
-log "Шаг 5/7 — генерирую Caddyfile из шаблона."
+log "Шаг 5/8 — генерирую Caddyfile из шаблона."
 load_env .env
 envsubst '${DOMAIN} ${ACME_EMAIL}' < Caddyfile.template > Caddyfile
 
-log "Шаг 6/7 — скачиваю образы и запускаю."
+log "Шаг 6/8 — скачиваю образы и запускаю."
 docker compose -f docker-compose.prod.yml --env-file .env pull
 docker compose -f docker-compose.prod.yml --env-file .env up -d
 
-log "Шаг 7/7 — ежедневный бэкап БД по cron (ATT-057 §4)."
+log "Шаг 7/8 — ежедневный бэкап БД по cron (ATT-057 §4)."
 CRON_LINE="0 3 * * * cd ${INSTALL_DIR} && ./backup_daily.sh >> ${INSTALL_DIR}/backup_cron.log 2>&1"
 if ! crontab -l 2>/dev/null | grep -qF "backup_daily.sh"; then
   (crontab -l 2>/dev/null; echo "${CRON_LINE}") | crontab -
   log "Cron добавлен: бэкап каждый день в 03:00 (время сервера)."
 else
   log "Cron для backup_daily.sh уже настроен — не дублирую."
+fi
+
+log "Шаг 8/8 — ежедневное email-напоминание об истечении лицензии."
+# Нет celery beat в проекте (сознательный выбор) — рассылка вызывается
+# cron'ом напрямую внутри backend-контейнера, та же схема, что у бэкапа.
+REMINDER_CRON_LINE="0 9 * * * cd ${INSTALL_DIR} && docker compose -f docker-compose.prod.yml exec -T backend python -m scripts.send_renewal_reminders >> ${INSTALL_DIR}/renewal_reminders.log 2>&1"
+if ! crontab -l 2>/dev/null | grep -qF "send_renewal_reminders"; then
+  (crontab -l 2>/dev/null; echo "${REMINDER_CRON_LINE}") | crontab -
+  log "Cron добавлен: напоминания об истечении лицензии каждый день в 09:00."
+else
+  log "Cron для send_renewal_reminders уже настроен — не дублирую."
 fi
 
 log "Готово. Сайт будет доступен на https://${DOMAIN} — Caddy получает"
