@@ -110,6 +110,19 @@ services:
     volumes:
       - uploads:/app/uploads
     command: ["celery", "-A", "apps.infrastructure.celery_app", "worker", "--loglevel=info"]
+    # Backend-образ содержит HTTP healthcheck, но worker не поднимает HTTP.
+    # Проверяем именно ответ этого экземпляра Celery через broker. Двойной
+    # доллар нужен, чтобы HOSTNAME раскрывался внутри контейнера, а не Compose.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "celery -A apps.infrastructure.celery_app inspect ping --destination celery@$$HOSTNAME --timeout 10 | grep -q pong",
+        ]
+      interval: 30s
+      timeout: 15s
+      start_period: 30s
+      retries: 3
     depends_on:
       db:
         condition: service_healthy
